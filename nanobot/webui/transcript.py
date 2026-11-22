@@ -22,6 +22,7 @@ from nanobot.runtime_context import public_history_message
 from nanobot.session.automation_turns import is_automation_kind
 from nanobot.session.display_history import (
     HISTORY_GENERATION_METADATA_KEY,
+    MAX_HISTORY_FACT_BYTES,
     HistoryFact,
     HistoryReader,
 )
@@ -268,6 +269,17 @@ def _record_for_append(obj: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
+def command_receipt_fits(event: dict[str, Any], record: dict[str, Any]) -> bool:
+    """Keep optional command facts only if both the live frame and the history record fit."""
+    if len(json.dumps(event, ensure_ascii=False).encode("utf-8")) > MAX_HISTORY_FACT_BYTES:
+        return False
+    try:
+        fact_from_record(_record_for_append(record)).encode()
+    except ValueError:
+        return False
+    return True
+
+
 def append_transcript_object(
     session_key: str, obj: dict[str, Any], *, sessions: SessionManager,
 ) -> None:
@@ -358,8 +370,6 @@ class WebUITranscriptRecorder:
         envelope = session_message_envelope(metadata)
         if envelope is not None and envelope["target_session_key"] != webui_session_key(chat_id):
             envelope = None
-        if text.strip() == "/stop" and not media_paths and envelope is None:
-            return False
         event = build_user_transcript_event(
             chat_id,
             text,
@@ -386,6 +396,7 @@ class WebUITranscriptRecorder:
 
     async def append_many(
         self, chat_id: str, events: Sequence[dict[str, Any]], *, metadata: dict[str, Any] | None,
+        raise_storage_errors: bool = False,
     ) -> bool:
         if self.sessions is None:
             return True  # A transport-only channel has no durable session service.
@@ -412,6 +423,8 @@ class WebUITranscriptRecorder:
                 self._log.warning("history append failed for {}: {}", chat_id, error)
             valid = valid and not errors
         except (OSError, ValueError, TypeError, sqlite3.Error, SessionConflictError, SessionOperationQueueFullError) as exc:
+            if raise_storage_errors and isinstance(exc, (OSError, sqlite3.OperationalError, SessionOperationQueueFullError)):
+                raise
             self._log.warning("history append failed for {}: {}", chat_id, exc)
             return False
         return valid
@@ -1051,7 +1064,11 @@ def _augment_projected_message(
     cached: bool = False,
 ) -> None:
     if augment_text is not None and projected.get("render_as") != "text":
-        projected["text"] = augment_text(projected["text"])
+        text = projected["text"]
+        projected["text"] = augment_text(text)
+        if projected["text"] != text:
+            # Clients prefer structured receipts to text. Do not override a freshly signed image.
+            projected.pop("command_result", None)
     if augment_media is not None and isinstance(raw_media := record.get("media"), list):
         paths = [path for path in cast(list[object], raw_media) if isinstance(path, str) and path]
         if paths:
@@ -1147,6 +1164,8 @@ def _client_projection_event(
         projected = {"event": "message", **common, "text": content}
         if record.get("side_channel") is True:
             projected["side_channel"] = True
+        if "command_result" in record:
+            projected["command_result"] = record["command_result"]
         if render_as_text:
             projected["render_as"] = "text"
         kind = record.get("kind")

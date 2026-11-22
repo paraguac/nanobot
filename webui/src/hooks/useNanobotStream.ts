@@ -335,6 +335,7 @@ export function useNanobotStream(
           ...message,
           deliveryStatus: "failed" as const,
           deliveryErrorKind: err.kind,
+          deliveryErrorDetail: err.kind === "turn_rejected" ? err.detail : undefined,
         }];
       });
       transcriptRef.current.projection = {

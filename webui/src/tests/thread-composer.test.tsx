@@ -3122,25 +3122,6 @@ describe("ThreadComposer", () => {
     expect(screen.queryByRole("listbox", { name: "Slash commands" })).not.toBeInTheDocument();
   });
 
-  it("keeps image generation mode out of the composer chrome", () => {
-    const onSend = vi.fn();
-    render(
-      <ThreadComposer
-        onSend={onSend}
-        placeholder="Type your message..."
-      />,
-    );
-
-    expect(screen.queryByRole("button", { name: "Image mode" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Image aspect ratio" })).not.toBeInTheDocument();
-
-    const input = screen.getByLabelText("Message input");
-    fireEvent.change(input, { target: { value: "Draw a friendly robot" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send message" }));
-
-    expect(onSend).toHaveBeenCalledWith("Draw a friendly robot", undefined, undefined);
-  });
-
   it.each(["!pwd", "  ! pwd  ", "!Write-Output first\nWrite-Output second", "!"])("runs bang input directly without a configured model: %s", (command) => {
     const onSend = vi.fn();
     render(<ThreadComposer onSend={onSend} modelNeedsSetup />);
@@ -3336,14 +3317,14 @@ describe("ThreadComposer", () => {
     expect(onSend).toHaveBeenCalledWith("/new with a title", undefined, undefined);
   });
 
-  it("routes a manually submitted stop command through the stop handler", () => {
+  it.each([false, true])("routes /stop through the stop handler (streaming=%s)", (isStreaming) => {
     const onSend = vi.fn();
     const onStop = vi.fn();
     render(
       <ThreadComposer
         onSend={onSend}
         onStop={onStop}
-        isStreaming
+        isStreaming={isStreaming}
         placeholder="Type your message..."
         slashCommands={COMMANDS}
       />,

@@ -46,6 +46,7 @@ import {
   X,
 } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { commandLabel } from "../../../../packages/client-events/command-result";
 
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
@@ -56,7 +57,6 @@ import {
   SkillPalette,
   SlashCommandPalette,
   skillSourceBucket,
-  slashCommandI18nKey,
   type MentionCandidate,
   type SkillPaletteItem,
   type SlashPaletteCommand,
@@ -166,7 +166,7 @@ interface ThreadComposerProps {
   modelPresets?: ModelPresetOption[];
   modelOptionsControl?: ModelOptionsControlProps;
   onModelMenuOpenChange?: (open: boolean) => void;
-  onModelPresetChange?: (name: string) => void;
+  onModelPresetChange?: (name: string) => void | Promise<void>;
   imageInputBlocked?: boolean;
   onInspectImagePreset?: () => void;
   modelProvider?: string | null;
@@ -506,7 +506,8 @@ export function ThreadComposer({
   focusRequest = 0,
   onQuotedContextChange,
 }: ThreadComposerProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
+  const locale = i18n.resolvedLanguage ?? i18n.language;
   const [initialDraft] = useState(() => draftKey ? draftStore?.get(draftKey, persistDraft) : undefined);
   const [value, setValue] = useState(initialDraft?.text ?? "");
   const [composerFocused, setComposerFocused] = useState(false);
@@ -523,6 +524,7 @@ export function ThreadComposer({
   const [inlineError, setInlineError] = useState<string | null>(null);
   const showToast = useToast();
   const [sendPending, setSendPending] = useState(false);
+  const [modelSwitchPending, setModelSwitchPending] = useState(false);
   const [pathInspection, setPathInspection] = useState<{
     generation: number; scope: string; range: PastedPathRange; attachment?: LocalAttachment;
   } | null>(null);
@@ -622,13 +624,14 @@ export function ThreadComposer({
     pause: pauseQueue,
     send: sendQueuedPrompt,
   } = useQueuedPrompt(pendingQueueKey, { isStreaming, activeTurnId, completedTurnIds }, {
-    disabled: !!disabled || sendPending,
+    disabled: !!disabled || sendPending || modelSwitchPending,
     onSend,
     validate: validatePrompt,
     onSendAttempt: focusTextarea,
   });
   const queuedPrompt = queueSnapshot.prompt;
   const interactionDisabled = !!disabled || sendPending || queueSnapshot.sending;
+  const sendDisabled = interactionDisabled || modelSwitchPending;
   useEffect(() => {
     if (queueSnapshot.error) setInlineError(queueSnapshot.error);
   }, [queueSnapshot.error]);
@@ -803,7 +806,7 @@ export function ThreadComposer({
   const requiresModelSetup = modelNeedsSetup && !isUserShell;
   const hasComposerContent = value.trim().length > 0 || readyImages.length > 0;
   const canSend =
-    !interactionDisabled
+    !sendDisabled
     && !requiresModelSetup
     && !encoding
     && !hasErrors
@@ -814,7 +817,7 @@ export function ThreadComposer({
   const canQueueGuidance =
     isStreaming
     && !isUserShell
-    && !interactionDisabled
+    && !sendDisabled
     && !modelNeedsSetup
     && !encoding
     && !hasErrors
@@ -909,13 +912,8 @@ export function ThreadComposer({
         ) {
           return [];
         }
-        const commandKey = slashCommandI18nKey(command.command);
-        const title = t(`thread.composer.slash.commands.${commandKey}.title`, {
-          defaultValue: command.title,
-        });
-        const description = t(`thread.composer.slash.commands.${commandKey}.description`, {
-          defaultValue: command.description,
-        });
+        const title = commandLabel(command.command, "title", locale) ?? command.title;
+        const description = commandLabel(command.command, "description", locale) ?? command.description;
         const matchRank = slashCommandMatchRank(command, title, description, slashQuery);
         if (matchRank === null) return [];
         let detail = description;
@@ -934,6 +932,8 @@ export function ThreadComposer({
           matchRank,
           item: {
             ...command,
+            title,
+            description,
             detail,
             badge,
             recent: recentSlashCommands.includes(command.command),
@@ -957,7 +957,7 @@ export function ThreadComposer({
         return 0;
       })
       .map(({ item }) => item);
-  }, [goalState?.active, isStreaming, modelLabel, onStop, recentSlashCommands, skillQuery, slashQuery, t, visibleSlashCommands]);
+  }, [goalState?.active, isStreaming, locale, modelLabel, onStop, recentSlashCommands, skillQuery, slashQuery, t, visibleSlashCommands]);
 
   const showSkillMenu = filteredSkills.length > 0;
   const showSlashMenu = !showSkillMenu && filteredSlashCommands.length > 0;
@@ -1562,7 +1562,6 @@ export function ThreadComposer({
       : null;
     if (
       slashLifecycle === "stop_active_turn"
-      && isStreaming
       && onStop
     ) {
       handleStop();
@@ -1889,7 +1888,17 @@ export function ThreadComposer({
       modelPresets={modelPresets}
       modelOptionsControl={modelOptionsControl}
       onMenuOpenChange={onModelMenuOpenChange}
-      onPresetChange={onModelPresetChange}
+      disabled={sendDisabled}
+      onPresetChange={onModelPresetChange && ((name) => {
+        setInlineError(null);
+        const selection = onModelPresetChange(name);
+        if (!selection) return;
+        setModelSwitchPending(true);
+        void selection.catch((error: unknown) => {
+          pauseQueue();
+          setInlineError(error instanceof Error ? error.message : t("message.agentActivity.commandFailed"));
+        }).finally(() => setModelSwitchPending(false));
+      })}
       onManageModels={onManageModels}
       onRequestComposerFocus={() => textareaRef.current?.focus()}
       provider={modelProvider}
@@ -2029,7 +2038,7 @@ export function ThreadComposer({
         {queuedPrompt ? (
           <QueuedPromptPreview
             prompt={queuedPrompt}
-            disabled={interactionDisabled}
+            disabled={sendDisabled}
             editDisabled={encoding || hasErrors}
             label={t("thread.composer.queued.label")}
             guideLabel={t("thread.composer.queued.guide")}

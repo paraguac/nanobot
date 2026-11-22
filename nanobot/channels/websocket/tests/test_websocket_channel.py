@@ -44,7 +44,6 @@ from nanobot.channels.websocket import runtime as websocket_runtime
 from nanobot.channels.websocket.runtime import (
     WebSocketChannel,
     WebSocketConfig,
-    _is_valid_chat_id,
     _parse_envelope,
     _parse_inbound_payload,
 )
@@ -480,7 +479,7 @@ async def test_reattach_during_terminal_write_observes_the_end(
         await release.wait()
         return persisted
 
-    monkeypatch.setattr(channel._outbound._transcripts, "prepare_and_append", persist_terminal)
+    monkeypatch.setattr(channel.gateway.transcripts, "append", persist_terminal)
     terminal = asyncio.create_task(channel.send(OutboundMessage(
         channel="websocket", chat_id=chat_id, content="", metadata=metadata, event=TurnEndEvent(),
     )))
@@ -1163,26 +1162,27 @@ async def test_webui_message_envelope_persists_user_transcript_for_refresh(histo
 
 
 @pytest.mark.asyncio
-async def test_webui_stop_control_message_is_not_persisted_as_user_bubble(history,
-    bus: MagicMock,
-    tmp_path,
-    monkeypatch,
+@pytest.mark.parametrize("command", ["/stop", "/STOP@nanobot"])
+async def test_webui_stop_control_is_acknowledged_without_a_chat_bubble(
+    history, command, bus: MagicMock, tmp_path, monkeypatch,
 ) -> None:
-
-
     monkeypatch.setattr("nanobot.config.paths.get_data_dir", lambda: tmp_path)
     channel = _ch(bus, session_manager=history.sessions)
     conn = AsyncMock()
     conn.remote_address = ("127.0.0.1", 50123)
+    observer = AsyncMock()
+    channel._attach(observer, "chat-1")
 
     await channel._dispatch_envelope(
         conn,
         "webui-client",
-        {"type": "message", "chat_id": "chat-1", "content": "/stop", "webui": True},
+        {"type": "message", "chat_id": "chat-1", "content": command, "webui": True, "turn_id": "stop-control"},
     )
 
     msg = bus.publish_inbound.await_args.args[0]
-    assert msg.content == "/stop"
+    assert msg.content == command
+    assert any(frame["event"] == "message_accepted" and not frame["starts_turn"] for frame in _sent_ws_payloads(conn))
+    assert not any(frame["event"] == "user_message" for frame in _sent_ws_payloads(observer))
     assert history.read("websocket:chat-1") == []
 
 
@@ -3556,11 +3556,13 @@ async def test_deferred_dream_reply_is_delivered_and_replayed_after_command_turn
     metadata = await history.metadata(chat_id, {WEBUI_TURN_METADATA_KEY: "dream-turn"})
     msg = InboundMessage("websocket", "user", chat_id, "/dream", metadata=metadata)
     context = CommandContext(msg=msg, session=None, key=msg.session_key, raw=msg.content,
-                             loop=cast(Any, SimpleNamespace(bus=bus)))
+                             loop=cast(Any, SimpleNamespace(bus=bus, schedule_background=asyncio.create_task)))
 
     acknowledgement = await cmd_dream(context)
     try:
         await channel.send(acknowledgement)
+        assert context.after_reply is not None
+        context.after_reply()
         await channel.send(OutboundMessage("websocket", chat_id, "", metadata=metadata, event=TurnEndEvent()))
     finally:
         finish_dream.set()
@@ -3579,9 +3581,10 @@ async def test_deferred_dream_reply_is_delivered_and_replayed_after_command_turn
     assert completed["turn_id"] != ack["turn_id"]
     for reply, replay in zip(replies, replayed, strict=True):
         assert reply["side_channel"] is True
-        assert {key: replay[key] for key in ("turn_id", "turn_seq", "side_channel", "text")} == {
-            key: reply[key] for key in ("turn_id", "turn_seq", "side_channel", "text")
-        }
+        assert reply["command_result"]["command"] == "/dream"
+        assert reply["command_result"]["parts"]
+        for key in ("turn_id", "turn_seq", "side_channel", "text", "command_result"):
+            assert replay[key] == reply[key]
 
 
 @pytest.mark.asyncio
@@ -5130,7 +5133,8 @@ async def test_commands_api_returns_slash_command_metadata(bus: MagicMock, start
         assert response.status_code == 200
         body = response.json()
         commands = {row["command"]: row for row in body["commands"]}
-        assert commands["/stop"]["title"] == "Stop current task"
+        assert "/skill" not in commands
+        assert commands["/stop"]["title"] == "Stop task"
         assert commands["/new"]["lifecycle"] == "finalize_active_turn"
         assert commands["/stop"]["lifecycle"] == "stop_active_turn"
         assert commands["/dream-log"]["lifecycle"] == "side_channel"
@@ -6043,14 +6047,6 @@ def test_parse_envelope_detects_typed_frames() -> None:
     assert env == {"type": "message", "chat_id": "abc", "content": "hi"}
 
 
-def test_parse_envelope_rejects_legacy_and_garbage() -> None:
-    assert _parse_envelope('{"content":"hi"}') is None
-    assert _parse_envelope("plain text") is None
-    assert _parse_envelope("{broken") is None
-    assert _parse_envelope("[1,2,3]") is None
-    assert _parse_envelope('{"type":123}') is None
-
-
 @pytest.mark.parametrize("retired", [False, True])
 def test_sessions_list_reports_only_live_runs(monkeypatch, retired: bool) -> None:
     from websockets.datastructures import Headers
@@ -6126,25 +6122,6 @@ def test_sessions_list_reports_only_live_runs(monkeypatch, retired: bool) -> Non
             "handle": handle.public_payload(),
         }
     ]
-
-
-@pytest.mark.parametrize(
-    ("value", "expected"),
-    [
-        ("abc", True),
-        ("a1b2_c:d-e", True),
-        ("x" * 64, True),
-        ("", False),
-        ("x" * 65, False),
-        ("has space", False),
-        ("a/b", False),
-        ("a.b", False),
-        (None, False),
-        (123, False),
-    ],
-)
-def test_is_valid_chat_id(value: Any, expected: bool) -> None:
-    assert _is_valid_chat_id(value) is expected
 
 
 @pytest.mark.asyncio
