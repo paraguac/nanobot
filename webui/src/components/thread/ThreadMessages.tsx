@@ -23,7 +23,7 @@ import type { CliAppInfo, McpPresetInfo, RetryStatus, SlashCommand, UIMessage } 
 interface ThreadMessagesProps {
   /** Only the primary list may act on the selected chat (never a nested subagent thread). */
   editScope?: string | null;
-  onRevealEarlierEditSource?: () => void;
+  historyComplete?: boolean;
   historyRows?: WeakMap<HTMLElement, HistoryRowIdentity>;
   messages: UIMessage[];
   beforeMessages?: ReactNode;
@@ -86,7 +86,7 @@ export function assistantForkFlags(units: DisplayUnit[]): boolean[] {
 
 export function ThreadMessages({
   editScope,
-  onRevealEarlierEditSource,
+  historyComplete = false,
   historyRows,
   messages,
   beforeMessages,
@@ -250,7 +250,7 @@ export function ThreadMessages({
             ? unit.message.id
             : undefined;
         const isEditing = !!selected && unit.type === "message" && !!userPromptId
-          && editSourceId(unit.message) === editSourceId(selected) && unit.message.content === selected.content;
+          && editSourceId(unit.message) === editSourceId(selected);
         if (isEditing) editSourceVisible = true;
         const forkIndex =
           unit.type === "message" && unit.message.role === "assistant" && forkFlags[index]
@@ -330,7 +330,7 @@ export function ThreadMessages({
         ];
       })]}
       {selected && !editSourceVisible ? <div className={cn("thread-message-row", units.length > 0 && "mt-5")}>
-        <MessageBubble message={selected} editor={messageEditorSlots(true, onRevealEarlierEditSource)} />
+        <MessageBubble message={selected} editor={messageEditorSlots(historyComplete)} />
       </div> : null}
       {afterMessages}
       {pendingActivity ? (

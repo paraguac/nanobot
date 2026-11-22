@@ -12,6 +12,7 @@ import {
 import { ArrowDown } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
+import { useMessageEditing } from "@/components/thread/MessageEditing";
 import { PromptRail } from "@/components/thread/PromptRail";
 import { matchHistoryRow, type HistoryRowIdentity } from "@/components/thread/history-row-identity";
 import { SubagentThreadMessages } from "@/components/thread/SubagentTaskResults";
@@ -494,7 +495,8 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
       },
     });
   }
-  const hasMessages = messages.length > 0;
+  const editing = useMessageEditing(messagesKey);
+  const hasMessages = messages.length > 0 || !!editing?.message;
   const hasThreadLayout = hasMessages || initialLoading;
   useLayoutEffect(() => {
     scrollRef.current = hasMessages
@@ -1310,7 +1312,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
                 <DiagramScope identity={conversationKey}>
                 <SubagentThreadMessages
                   editScope={messagesKey}
-                  onRevealEarlierEditSource={hiddenMessageCount > 0 || hasMoreBefore ? loadEarlierMessages : undefined}
+                  historyComplete={historyExhausted && !historyWindow?.hasMoreAfter}
                   historyRows={historyRows}
                   key={messagesKey}
                   messages={visibleMessages}
