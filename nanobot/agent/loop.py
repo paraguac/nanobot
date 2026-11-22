@@ -958,7 +958,7 @@ class AgentLoop:
 
     async def _cancel_active_tasks(self, key: str) -> int:
         with self._pending_queues.controlling(key):
-            await self._pending_queues.wait_for_edit(key)
+            await self._pending_queues.wait_for_controls(key, kind="edit")
             return await self._cancel_session_work(key)
 
     async def _cancel_session_work(self, key: str) -> int:
@@ -1002,9 +1002,9 @@ class AgentLoop:
 
     async def discard_session(self, key: str) -> None:
         """Stop active work for *key* and forget its cached session."""
-        with self.bus.admission.activity(), self._pending_queues.controlling(key, discard=True):
+        with self.bus.admission.activity(), self._pending_queues.controlling(key, "discard"):
             try:
-                await self._pending_queues.wait_for_edit(key)
+                await self._pending_queues.wait_for_controls(key, kind="edit")
                 await self.sessions.state.discard(key)
                 await self._cancel_session_work(key)
             finally:
@@ -1782,7 +1782,8 @@ class AgentLoop:
 
     async def _aclose_unlocked(self) -> None:
         self._pending_queues.close_admission()
-        await self._pending_queues.join_edits()
+        # An already admitted edit can still hand its committed input to a new worker.
+        await self._pending_queues.wait_for_controls(kind="edit")
         self._running = False
         errors: list[BaseException] = []
         active_task_groups = getattr(self, "_active_tasks", {})
@@ -1805,7 +1806,7 @@ class AgentLoop:
             for key, pending in pending_queues.items():
                 if self._pending_queues.get(key) is pending:
                     await self._cancel_pending_messages(key, pending, asyncio.CancelledError())
-            await self._pending_queues.join_controls()
+            await self._pending_queues.wait_for_controls()
             # A scan can schedule archival while shutdown waits for it.
             while self._background_tasks:
                 tasks = tuple(self._background_tasks)

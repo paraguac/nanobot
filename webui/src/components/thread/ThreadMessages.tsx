@@ -10,7 +10,7 @@ import {
 } from "@/components/thread/AgentActivityCluster";
 import { sameHistoryRowIdentity, type HistoryRowIdentity, type HistoryRowSource } from "@/components/thread/history-row-identity";
 import { AssistantSelectionAction } from "@/components/thread/AssistantSelectionAction";
-import { messageEditorSlots, useMessageEditing } from "@/components/thread/MessageEditing";
+import { editSourceId, messageEditorSlots, useMessageEditing } from "@/components/thread/MessageEditing";
 import { Dialog, DialogContent, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useLocalPreferences } from "@/hooks/useLocalPreferences";
@@ -23,6 +23,7 @@ import type { CliAppInfo, McpPresetInfo, RetryStatus, SlashCommand, UIMessage } 
 interface ThreadMessagesProps {
   /** Only the primary list may act on the selected chat (never a nested subagent thread). */
   editScope?: string | null;
+  onRevealEarlierEditSource?: () => void;
   historyRows?: WeakMap<HTMLElement, HistoryRowIdentity>;
   messages: UIMessage[];
   beforeMessages?: ReactNode;
@@ -85,6 +86,7 @@ export function assistantForkFlags(units: DisplayUnit[]): boolean[] {
 
 export function ThreadMessages({
   editScope,
+  onRevealEarlierEditSource,
   historyRows,
   messages,
   beforeMessages,
@@ -247,8 +249,8 @@ export function ThreadMessages({
           unit.type === "message" && unit.message.role === "user"
             ? unit.message.id
             : undefined;
-        const isEditing = !!selected && unit.type === "message" && userPromptId === selected.id
-          && unit.message.turnId === selected.turnId && unit.message.content === selected.content;
+        const isEditing = !!selected && unit.type === "message" && !!userPromptId
+          && editSourceId(unit.message) === editSourceId(selected) && unit.message.content === selected.content;
         if (isEditing) editSourceVisible = true;
         const forkIndex =
           unit.type === "message" && unit.message.role === "assistant" && forkFlags[index]
@@ -328,7 +330,7 @@ export function ThreadMessages({
         ];
       })]}
       {selected && !editSourceVisible ? <div className={cn("thread-message-row", units.length > 0 && "mt-5")}>
-        <MessageBubble message={selected} editor={messageEditorSlots(true)} />
+        <MessageBubble message={selected} editor={messageEditorSlots(true, onRevealEarlierEditSource)} />
       </div> : null}
       {afterMessages}
       {pendingActivity ? (

@@ -1310,6 +1310,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
                 <DiagramScope identity={conversationKey}>
                 <SubagentThreadMessages
                   editScope={messagesKey}
+                  onRevealEarlierEditSource={hiddenMessageCount > 0 || hasMoreBefore ? loadEarlierMessages : undefined}
                   historyRows={historyRows}
                   key={messagesKey}
                   messages={visibleMessages}

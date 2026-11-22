@@ -593,6 +593,7 @@ export function ThreadShell({
       completedTurnIds,
       activeTurnId: historyActiveTurnId,
       historyGeneration,
+      sourceRevision,
       version: historyVersion,
       forkBoundaryMessageCount,
     },
@@ -1451,6 +1452,7 @@ export function ThreadShell({
         >
           <FileActionsProvider value={previewSessionKey ? fileActions : undefined}>
           <MessageEditingProvider chatId={chatId} busy={turnActive}
+            sourceRevision={!promptNavigation.window || promptNavigation.window.sourceRevision === sourceRevision ? sourceRevision : null}
             onBegin={anchorMessageEdit} onReviewLatest={promptNavigation.latest}
             enabled={!temporary && messagesReady && historyKey === `websocket:${chatId}`}>
           <ExecSessionCommandsContext.Provider value={sessionCommands}>
